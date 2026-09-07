@@ -1,0 +1,6 @@
+{
+  "name": "SmartCam - Detector e Analista Multi-Objeto",
+  "description": "Detector e analista visual inteligente em tempo real para câmeras de segurança, identificando pessoas, veículos, animais e objetos com alertas acionáveis.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
