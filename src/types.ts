@@ -92,9 +92,12 @@ export interface NetworkCamera {
   name: string;
   ip: string;
   status: 'online' | 'offline';
+  model?: string;
+  macAddress?: string;
 }
 
 export interface NetworkScanState {
   isScanning: boolean;
   foundCameras: NetworkCamera[];
+  progress: number;
 }

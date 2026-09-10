@@ -17,16 +17,21 @@ async function startServer() {
   };
 
   const normalizeDetections = (detections: any[]) => {
+    if (!Array.isArray(detections)) return [];
+    
     return detections.map((det: any) => {
       let { top, left, bottom, right } = det.bounding_box_relative || { top: 0, left: 0, bottom: 0, right: 0 };
+      
+      // Normaliza coordenadas se estiverem em escala 0-1000
       if (top > 1) [top, left, bottom, right] = [top, left, bottom, right].map(v => v / 1000);
       
-      let category = det.category?.toLowerCase();
+      let category = (det.category || "").toLowerCase();
       const valid = ["person", "animal", "object", "vehicle"];
+      
       if (!valid.includes(category)) {
-        if (category?.match(/car|veic|moto/)) category = "vehicle";
-        else if (category?.match(/pess|hum|man/)) category = "person";
-        else if (category?.match(/anim|dog|cat|cao/)) category = "animal";
+        if (category.match(/car|veic|moto/)) category = "vehicle";
+        else if (category.match(/pess|hum|man/)) category = "person";
+        else if (category.match(/anim|dog|cat|cao/)) category = "animal";
         else category = "object";
       }
 
@@ -73,11 +78,16 @@ async function startServer() {
       });
 
       const parsed = JSON.parse(response.text || "{}");
-      if (parsed.detections) parsed.detections = normalizeDetections(parsed.detections);
+      const normalized = {
+        ...parsed,
+        detections: normalizeDetections(parsed.detections || []),
+        processing_time_ms: Date.now() - startTime
+      };
       
-      res.json({ ...parsed, processing_time_ms: Date.now() - startTime });
+      res.json(normalized);
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error("Analysis error:", err);
+      res.status(500).json({ error: err.message || "Internal server error" });
     }
   });
 
