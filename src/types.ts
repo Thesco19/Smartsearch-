@@ -3,7 +3,7 @@ export type DetectionCategory = 'person' | 'animal' | 'object' | 'vehicle';
 export type AlertSeverity = 'low' | 'medium' | 'high';
 
 export interface BoundingBoxRelative {
-  top: number; // 0.0 to 1.0 (or percentage)
+  top: number;
   left: number;
   bottom: number;
   right: number;
@@ -60,11 +60,11 @@ export interface SandboxEntity {
   type: 'courier' | 'intruder' | 'pedestrian' | 'car' | 'dog' | 'cat' | 'package' | 'open_gate';
   category: DetectionCategory;
   name: string;
-  x: number; // 0 to 1
-  y: number; // 0 to 1
+  x: number;
+  y: number;
   size: number;
   speed: number;
-  direction: number; // angle or 1/-1
+  direction: number;
   state: string;
   isCustom?: boolean;
 }
