@@ -52,7 +52,14 @@ async function startServer() {
     const startTime = Date.now();
     try {
       const { image, securityContext } = req.body;
-      if (!image) return res.status(400).json({ timestamp: new Date().toISOString(), detections: [], event_alert: { triggered: false, severity: 'low', summary: '' }, error: "Frame required" });
+      if (!image) {
+        return res.status(400).json({ 
+          timestamp: new Date().toISOString(), 
+          detections: [], 
+          event_alert: { triggered: false, severity: 'low', summary: '' }, 
+          error: "Frame required" 
+        });
+      }
 
       const match = image.match(/^data:([a-zA-Z0-9]+\/[a-zA-Z0-9-.+]+);base64,(.+)$/);
       const mimeType = match ? match[1] : "image/jpeg";
