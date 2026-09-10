@@ -109,24 +109,4 @@ export interface NetworkCamera {
   ip: string;
   port: number;
   protocol: 'RTSP' | 'ONVIF' | 'HTTP' | 'MJPEG';
-  streamUrl: string;
-  resolution: string;
-  fps: number;
-  bitrate?: number;
-  status: 'online' | 'offline' | 'auth_required';
-  latencyMs: number;
-  macAddress: string;
-  location: string;
-  sceneType: SandboxSceneType;
-  lighting?: SandboxLighting;
-  requiresAuth?: boolean;
-  username?: string;
-}
-
-export interface NetworkScanState {
-  isScanning: boolean;
-  progress: number;
-  scannedCount: number;
-  subnet: string;
-  foundCameras: NetworkCamera[];
-}
+  streamUrl
