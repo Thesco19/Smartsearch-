@@ -41,6 +41,10 @@ export interface AnalysisRequest {
   timestamp?: string;
 }
 
+export interface AnalysisResponse extends SmartCamAnalysisResponse {
+  error?: string;
+}
+
 export interface SecurityEventRecord {
   id: string;
   timestamp: string;

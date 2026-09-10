@@ -2,7 +2,7 @@ import express, { Request, Response } from "express";
 import path from "path";
 import { GoogleGenAI, Type } from "@google/genai";
 import { createServer as createViteServer } from "vite";
-import { AnalysisRequest, SmartCamDetection } from "./src/types";
+import { AnalysisRequest, AnalysisResponse, SmartCamDetection } from "./src/types";
 
 async function startServer() {
   const app = express();
@@ -48,11 +48,11 @@ async function startServer() {
     });
   };
 
-  app.post("/api/analyze-frame", async (req: Request<{}, {}, AnalysisRequest>, res: Response) => {
+  app.post("/api/analyze-frame", async (req: Request<{}, {}, AnalysisRequest>, res: Response<AnalysisResponse>) => {
     const startTime = Date.now();
     try {
       const { image, securityContext } = req.body;
-      if (!image) return res.status(400).json({ error: "Frame required" });
+      if (!image) return res.status(400).json({ timestamp: new Date().toISOString(), detections: [], event_alert: { triggered: false, severity: 'low', summary: '' }, error: "Frame required" });
 
       const match = image.match(/^data:([a-zA-Z0-9]+\/[a-zA-Z0-9-.+]+);base64,(.+)$/);
       const mimeType = match ? match[1] : "image/jpeg";
@@ -78,7 +78,7 @@ async function startServer() {
       });
 
       const parsed = JSON.parse(response.text || "{}");
-      const normalized = {
+      const normalized: AnalysisResponse = {
         ...parsed,
         detections: normalizeDetections(parsed.detections || []),
         processing_time_ms: Date.now() - startTime
@@ -87,7 +87,12 @@ async function startServer() {
       res.json(normalized);
     } catch (err: any) {
       console.error("Analysis error:", err);
-      res.status(500).json({ error: err.message || "Internal server error" });
+      res.status(500).json({ 
+        timestamp: new Date().toISOString(), 
+        detections: [], 
+        event_alert: { triggered: false, severity: 'low', summary: '' }, 
+        error: err.message || "Internal server error" 
+      });
     }
   });
 
