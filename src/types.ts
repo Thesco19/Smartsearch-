@@ -2,12 +2,14 @@ export type DetectionCategory = 'person' | 'animal' | 'object' | 'vehicle';
 
 export type AlertSeverity = 'low' | 'medium' | 'high';
 
-export interface BoundingBoxRelative {
+export interface BoundingBox {
   top: number;
   left: number;
   bottom: number;
   right: number;
 }
+
+export interface BoundingBoxRelative extends BoundingBox {}
 
 export interface DetectionAttributes {
   description: string;

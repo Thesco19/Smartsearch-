@@ -26,7 +26,7 @@ async function startServer() {
         return res.status(400).json({ 
           timestamp: new Date().toISOString(), 
           detections: [], 
-          event_alert: { triggered: false, severity: 'low', summary: '' }, 
+          event_alert: { triggered: false, severity: 'low', summary: 'Missing image data' }, 
           error: "Frame required" 
         });
       }
@@ -67,7 +67,7 @@ async function startServer() {
       res.status(500).json({ 
         timestamp: new Date().toISOString(), 
         detections: [], 
-        event_alert: { triggered: false, severity: 'low', summary: '' }, 
+        event_alert: { triggered: false, severity: 'low', summary: 'Analysis failed' }, 
         error: err.message || "Internal server error" 
       });
     }
