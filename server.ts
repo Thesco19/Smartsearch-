@@ -1,7 +1,8 @@
-import express from "express";
+import express, { Request, Response } from "express";
 import path from "path";
 import { GoogleGenAI, Type } from "@google/genai";
 import { createServer as createViteServer } from "vite";
+import { AnalysisRequest, SmartCamDetection } from "./src/types";
 
 async function startServer() {
   const app = express();
@@ -16,13 +17,12 @@ async function startServer() {
     return new GoogleGenAI({ apiKey, httpOptions: { headers: { "User-Agent": "aistudio-build" } } });
   };
 
-  const normalizeDetections = (detections: any[]) => {
+  const normalizeDetections = (detections: any[]): SmartCamDetection[] => {
     if (!Array.isArray(detections)) return [];
     
     return detections.map((det: any) => {
       let { top, left, bottom, right } = det.bounding_box_relative || { top: 0, left: 0, bottom: 0, right: 0 };
       
-      // Normaliza coordenadas se estiverem em escala 0-1000
       if (top > 1) [top, left, bottom, right] = [top, left, bottom, right].map(v => v / 1000);
       
       let category = (det.category || "").toLowerCase();
@@ -48,7 +48,7 @@ async function startServer() {
     });
   };
 
-  app.post("/api/analyze-frame", async (req, res) => {
+  app.post("/api/analyze-frame", async (req: Request<{}, {}, AnalysisRequest>, res: Response) => {
     const startTime = Date.now();
     try {
       const { image, securityContext } = req.body;

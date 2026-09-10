@@ -35,6 +35,12 @@ export interface SmartCamAnalysisResponse {
   processing_time_ms?: number;
 }
 
+export interface AnalysisRequest {
+  image: string;
+  securityContext?: string;
+  timestamp?: string;
+}
+
 export interface SecurityEventRecord {
   id: string;
   timestamp: string;
