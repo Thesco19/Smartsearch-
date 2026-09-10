@@ -1,9 +1,9 @@
 import React from 'react';
-import { Shield, Radio, Volume2, VolumeX, Eye, Wifi } from 'lucide-react';
+import { Shield, Radio, Volume2, VolumeX, Eye, Wifi, Brain } from 'lucide-react';
 
 interface NavbarProps {
-  activeMode: 'live' | 'sandbox' | 'benchmark';
-  onChangeMode: (mode: 'live' | 'sandbox' | 'benchmark') => void;
+  activeMode: 'live' | 'network_ai' | 'sandbox' | 'benchmark';
+  onChangeMode: (mode: 'live' | 'network_ai' | 'sandbox' | 'benchmark') => void;
   isSoundEnabled: boolean;
   onToggleSound: () => void;
   isAutoDetecting: boolean;
@@ -42,7 +42,7 @@ export const Navbar: React.FC<NavbarProps> = ({
         </div>
 
         {/* Center Mode Selector */}
-        <div className="flex items-center bg-slate-950 p-1 rounded-xl border border-slate-800 self-start md:self-auto">
+        <div className="flex flex-wrap items-center bg-slate-950 p-1 rounded-xl border border-slate-800 self-start md:self-auto gap-1">
           <button
             id="nav-mode-live"
             onClick={() => onChangeMode('live')}
@@ -54,6 +54,21 @@ export const Navbar: React.FC<NavbarProps> = ({
           >
             Feed da Câmera
           </button>
+
+          <button
+            id="nav-mode-network-ai"
+            onClick={() => onChangeMode('network_ai')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 ${
+              activeMode === 'network_ai'
+                ? 'bg-gradient-to-r from-cyan-600 to-indigo-600 text-white shadow-md ring-1 ring-cyan-400/50'
+                : 'text-cyan-400 hover:text-cyan-200 hover:bg-slate-900/60'
+            }`}
+          >
+            <Brain className="w-3.5 h-3.5 text-cyan-300" />
+            <span>Inteligência & Auto-Conexão</span>
+            <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse hidden sm:inline" />
+          </button>
+
           <button
             id="nav-mode-sandbox"
             onClick={() => onChangeMode('sandbox')}
@@ -65,6 +80,7 @@ export const Navbar: React.FC<NavbarProps> = ({
           >
             Sandbox SmartCam
           </button>
+
           <button
             id="nav-mode-benchmark"
             onClick={() => onChangeMode('benchmark')}

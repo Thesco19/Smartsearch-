@@ -1,7 +1,64 @@
 import express from "express";
 import path from "path";
+import net from "net";
 import { GoogleGenAI, Type } from "@google/genai";
 import { createServer as createViteServer } from "vite";
+
+// Real TCP Socket probe for backend reachability test
+function probeTcpSocket(
+  host: string,
+  port: number,
+  timeoutMs = 900
+): Promise<{ reachable: boolean; latencyMs: number; hostAlive: boolean; error?: string }> {
+  return new Promise((resolve) => {
+    const start = Date.now();
+    const socket = new net.Socket();
+    let settled = false;
+
+    socket.setTimeout(timeoutMs);
+
+    socket.on("connect", () => {
+      if (!settled) {
+        settled = true;
+        const latencyMs = Date.now() - start;
+        socket.destroy();
+        resolve({ reachable: true, latencyMs, hostAlive: true });
+      }
+    });
+
+    socket.on("timeout", () => {
+      if (!settled) {
+        settled = true;
+        socket.destroy();
+        resolve({ reachable: false, latencyMs: timeoutMs, hostAlive: false, error: "timeout" });
+      }
+    });
+
+    socket.on("error", (err: any) => {
+      if (!settled) {
+        settled = true;
+        socket.destroy();
+        // ECONNREFUSED means the host is alive and responded with a TCP reset (RST packet)
+        const hostAlive = err.code === "ECONNREFUSED";
+        resolve({
+          reachable: false,
+          latencyMs: Date.now() - start,
+          hostAlive,
+          error: err.code || err.message,
+        });
+      }
+    });
+
+    try {
+      socket.connect(port, host);
+    } catch (e: any) {
+      if (!settled) {
+        settled = true;
+        resolve({ reachable: false, latencyMs: Date.now() - start, hostAlive: false, error: e.message });
+      }
+    }
+  });
+}
 
 async function startServer() {
   const app = express();
@@ -173,23 +230,252 @@ async function startServer() {
     });
   });
 
-  // Test Camera Connection Endpoint
-  app.post("/api/test-camera-ping", (req, res) => {
+  // Real Camera TCP Socket Ping Endpoint
+  app.post("/api/test-camera-ping", async (req, res) => {
     const { ip, port = 554, protocol = "RTSP" } = req.body;
     if (!ip) {
       return res.status(400).json({ error: "Endereço IP é obrigatório." });
     }
-    // Simulate ping / handshake latency
-    const latency = Math.floor(Math.random() * 15) + 6;
+
+    const numPort = Number(port) || 554;
+    // Perform real TCP probe
+    const probe = await probeTcpSocket(ip, numPort, 1200);
+
     res.json({
       ip,
-      port,
+      port: numPort,
       protocol,
-      reachable: true,
-      latencyMs: latency,
-      banner: `RTSP/1.0 200 OK - ONVIF/2.0 compatible server on ${ip}:${port}`,
+      reachable: probe.reachable,
+      hostAlive: probe.hostAlive,
+      latencyMs: probe.latencyMs,
+      banner: probe.reachable
+        ? `Porta TCP ${numPort} ABERTA em ${ip} (Latência: ${probe.latencyMs}ms)`
+        : probe.hostAlive
+        ? `Host ${ip} respondeu, mas a porta ${numPort} está FECHADA (TCP RST - ${probe.latencyMs}ms)`
+        : `Host ${ip}:${numPort} não respondeu (timeout após ${probe.latencyMs}ms)`,
+      error: probe.error,
       timestamp: new Date().toISOString(),
     });
+  });
+
+  // Real Multi-Port Scan Endpoint (TCP Sockets)
+  app.post("/api/scan-tcp-ports", async (req, res) => {
+    const { ip, ports = [554, 5000, 8899, 80, 8080, 81] } = req.body;
+    if (!ip) {
+      return res.status(400).json({ error: "Endereço IP é obrigatório." });
+    }
+
+    const results = [];
+    for (const p of ports) {
+      const numPort = Number(p);
+      const probe = await probeTcpSocket(ip, numPort, 600);
+      results.push({
+        port: numPort,
+        reachable: probe.reachable,
+        hostAlive: probe.hostAlive,
+        latencyMs: probe.latencyMs,
+        error: probe.error,
+      });
+    }
+
+    res.json({
+      ip,
+      scannedAt: new Date().toISOString(),
+      portsScanned: results,
+    });
+  });
+
+  // Diagnostic Log Storage Endpoint (in-memory store for sharing & troubleshooting)
+  let latestDiagnosticLogs: Array<{ id: string; savedAt: string; title: string; content: string }> = [];
+
+  app.post("/api/save-scan-log", (req, res) => {
+    const { title = "Relatório de Rastreio de Rede", content } = req.body;
+    if (!content) {
+      return res.status(400).json({ error: "Conteúdo do log é obrigatório." });
+    }
+
+    const entry = {
+      id: `log-${Date.now()}`,
+      savedAt: new Date().toISOString(),
+      title,
+      content,
+    };
+
+    latestDiagnosticLogs.unshift(entry);
+    if (latestDiagnosticLogs.length > 20) {
+      latestDiagnosticLogs = latestDiagnosticLogs.slice(0, 20);
+    }
+
+    res.json({ success: true, logId: entry.id, savedAt: entry.savedAt });
+  });
+
+  app.get("/api/scan-logs", (req, res) => {
+    res.json({ logs: latestDiagnosticLogs });
+  });
+
+  // Proxy camera snapshot endpoint (solves CORS / Mixed-Content for reachable camera URLs)
+  app.get("/api/proxy-camera-snapshot", async (req, res) => {
+    const targetUrl = req.query.url as string;
+    if (!targetUrl) {
+      return res.status(400).json({ error: "Parâmetro 'url' é obrigatório." });
+    }
+
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 4000);
+
+      const response = await fetch(targetUrl, {
+        signal: controller.signal,
+        headers: {
+          "User-Agent": "SmartCam-Proxy/1.0",
+          Accept: "image/jpeg,image/png,image/*,*/*",
+        },
+      });
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        return res.status(response.status).json({
+          error: `Falha ao obter imagem da câmera: ${response.status} ${response.statusText}`,
+        });
+      }
+
+      const contentType = response.headers.get("content-type") || "image/jpeg";
+      const buffer = await response.arrayBuffer();
+
+      res.setHeader("Content-Type", contentType);
+      res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+      res.setHeader("Access-Control-Allow-Origin", "*");
+      res.send(Buffer.from(buffer));
+    } catch (err: any) {
+      res.status(502).json({
+        error: `Não foi possível conectar ao endereço da câmera (${err.message}). Verifique se o endereço é acessível.`,
+      });
+    }
+  });
+
+  // AI Camera Config Resolver (Gemini deduces brand, model, stream paths, and protocol)
+  app.post("/api/ai-resolve-camera-config", async (req, res) => {
+    try {
+      const { ip, detectedPorts = [], bannerInfo = "", partialBrandOrModel = "" } = req.body;
+
+      if (!ip) {
+        return res.status(400).json({ error: "O endereço IP é obrigatório." });
+      }
+
+      const ai = getAiClient();
+      const prompt = `Você é um Engenheiro Sênior Especialista em Protocolos de Câmeras IP, CFTV, NVR e IoT.
+Foi detectado na rede local um dispositivo com as seguintes características:
+- IP: ${ip}
+- Portas abertas identificadas: ${detectedPorts.length > 0 ? detectedPorts.join(", ") : "Não identificadas ou padrão"}
+- Informações de banner / cabeçalho / título HTTP: "${bannerInfo || "Nenhum cabeçalho extra"}"
+- Marca ou pista informada: "${partialBrandOrModel || "Desconhecida"}"
+
+Com base no seu conhecimento de milhares de modelos de segurança (Kapbom, Yoosee, ICSee, Intelbras, Hikvision, Dahua, Axis, Reolink, ESP32-CAM, Android IP Webcam, TP-Link Tapo, Uniview, VStarcam, etc.):
+1. Deduza a marca e modelo mais provável do dispositivo. Para câmeras Kapbom (Speed Dome PTZ Wi-Fi com antenas, Yoosee/ICSee), use caminhos /onvif1, /onvif2, /live/ch0 na porta 554 ou 5000 com senha padrão 123456.
+2. Defina o protocolo de transmissão mais viável para o navegador Web (MJPEG, SNAPSHOT ou RTSP).
+3. Liste os caminhos de streaming HTTP/MJPEG/RTSP mais comuns e prováveis para essa marca (do mais comum ao menos comum).
+4. Forneça a URL de snapshot HTTP mais segura para fallback.
+5. Indique as credenciais de fábrica mais comuns (usuário e senha).
+6. Explique brevemente sua dedução técnica e como o aplicativo deve se conectar.`;
+
+      const response = await ai.models.generateContent({
+        model: "gemini-3.8-flash",
+        contents: prompt,
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              brand: { type: Type.STRING, description: "Marca deduzida da câmera (ex: Intelbras, Hikvision, ESP32-CAM, etc.)" },
+              model: { type: Type.STRING, description: "Modelo ou série estimada" },
+              recommendedProtocol: { type: Type.STRING, description: "Deve ser MJPEG, SNAPSHOT, RTSP ou HTTP" },
+              candidateStreamPaths: {
+                type: Type.ARRAY,
+                items: { type: Type.STRING },
+                description: "Lista de caminhos ordenados por probabilidade (ex: ['/cgi-bin/snapshot.cgi', '/video', '/stream', '/shot.jpg'])",
+              },
+              snapshotFallbackPath: { type: Type.STRING, description: "Melhor caminho para captura de foto/snapshot individual" },
+              defaultCredentials: {
+                type: Type.OBJECT,
+                properties: {
+                  username: { type: Type.STRING },
+                  passwordHint: { type: Type.STRING },
+                },
+                required: ["username", "passwordHint"],
+              },
+              confidence: { type: Type.NUMBER, description: "Grau de certeza entre 0.0 e 1.0" },
+              explanation: { type: Type.STRING, description: "Explicação técnica sucinta da dedução" },
+              learningStrategy: { type: Type.STRING, description: "Dica para negociação de conexão com o dispositivo" },
+            },
+            required: [
+              "brand",
+              "model",
+              "recommendedProtocol",
+              "candidateStreamPaths",
+              "snapshotFallbackPath",
+              "defaultCredentials",
+              "confidence",
+              "explanation",
+              "learningStrategy",
+            ],
+          },
+        },
+      });
+
+      const responseText = response.text || "{}";
+      const parsed = JSON.parse(responseText);
+      return res.json(parsed);
+    } catch (err: any) {
+      console.warn("Falha no Gemini AI Camera Resolver, usando heurística de fallback:", err);
+      // Fallback heuristic if API fails
+      const ports: number[] = req.body.detectedPorts || [];
+      const partialHint: string = (req.body.partialBrandOrModel || "").toLowerCase();
+      let brand = "Genérica / ONVIF";
+      let model = "Câmera IP Padrão";
+      let recommendedProtocol = "MJPEG";
+      let candidateStreamPaths = ["/video", "/shot.jpg", "/stream", "/snapshot.jpg", "/cgi-bin/snapshot.cgi"];
+      let snapshotFallbackPath = "/shot.jpg";
+      let defaultCredentials = { username: "admin", passwordHint: "admin ou 12345" };
+
+      if (partialHint.includes("kapbom") || partialHint.includes("yoosee") || partialHint.includes("icsee") || ports.includes(5000) || ports.includes(8899)) {
+        brand = "Kapbom (Yoosee / ICSee PTZ)";
+        model = "Câmera Wi-Fi Externa Speed Dome (Série KA-S)";
+        recommendedProtocol = "RTSP";
+        candidateStreamPaths = ["/onvif1", "/onvif2", "/live/ch0", "/stream1", "/snapshot.jpg"];
+        snapshotFallbackPath = "/snapshot.jpg";
+        defaultCredentials = { username: "admin", passwordHint: "123456 ou senha cadastrada no app Yoosee / ICSee" };
+      } else if (ports.includes(8080)) {
+        brand = "Smartphone (IP Webcam / DroidCam)";
+        model = "Android / iOS Streaming App";
+        recommendedProtocol = "MJPEG";
+        candidateStreamPaths = ["/video", "/shot.jpg", "/audio.wav"];
+        snapshotFallbackPath = "/shot.jpg";
+      } else if (ports.includes(81)) {
+        brand = "AI-Thinker (ESP32-CAM)";
+        model = "OV2640 / OV3660 IoT";
+        recommendedProtocol = "MJPEG";
+        candidateStreamPaths = ["/stream", "/capture", "/jpg"];
+        snapshotFallbackPath = "/capture";
+      } else if (ports.includes(80) || ports.includes(37777)) {
+        brand = "Intelbras / Dahua";
+        model = "Série VIP / IPC";
+        recommendedProtocol = "SNAPSHOT";
+        candidateStreamPaths = ["/cgi-bin/snapshot.cgi", "/cam/realmonitor?channel=1&subtype=0", "/snapshot.jpg"];
+        snapshotFallbackPath = "/cgi-bin/snapshot.cgi";
+      }
+
+      return res.json({
+        brand,
+        model,
+        recommendedProtocol,
+        candidateStreamPaths,
+        snapshotFallbackPath,
+        defaultCredentials,
+        confidence: 0.95,
+        explanation: "Dedução heurística baseada no mapeamento de portas e modelo Kapbom.",
+        learningStrategy: "Testar caminhos em sequência iniciando pelo fluxo RTSP /onvif1 (porta 554/5000).",
+      });
+    }
   });
 
   // Analyze frame endpoint

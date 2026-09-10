@@ -108,7 +108,7 @@ export interface NetworkCamera {
   model: string;
   ip: string;
   port: number;
-  protocol: 'RTSP' | 'ONVIF' | 'HTTP' | 'MJPEG';
+  protocol: 'RTSP' | 'ONVIF' | 'HTTP' | 'MJPEG' | 'SNAPSHOT';
   streamUrl: string;
   resolution: string;
   fps: number;
@@ -121,6 +121,9 @@ export interface NetworkCamera {
   lighting?: SandboxLighting;
   requiresAuth?: boolean;
   username?: string;
+  isRealStream?: boolean;
+  streamType?: 'mjpeg' | 'snapshot' | 'browser_device' | 'simulation';
+  deviceId?: string;
 }
 
 export interface NetworkScanState {
@@ -129,4 +132,70 @@ export interface NetworkScanState {
   scannedCount: number;
   subnet: string;
   foundCameras: NetworkCamera[];
+}
+
+export interface LearnedCameraProfile {
+  id: string;
+  ip: string;
+  port: number;
+  brand: string;
+  model: string;
+  protocol: 'MJPEG' | 'SNAPSHOT' | 'RTSP' | 'ONVIF' | 'HTTP';
+  streamPath: string;
+  streamUrl: string;
+  detectedAt: string;
+  authType: 'none' | 'basic' | 'digest';
+  username?: string;
+  password?: string;
+  latencyMs: number;
+  fps: number;
+  resolution: string;
+  confidence: number;
+  aiNotes?: string;
+  testedCandidatePaths: string[];
+  successfulPath: string;
+  fallbackPath?: string;
+  isAiResolved?: boolean;
+}
+
+export interface DiscoveryLogEvent {
+  id: string;
+  timestamp: string;
+  phase: 'probe' | 'fingerprint' | 'ai_resolve' | 'negotiate' | 'learned' | 'failed';
+  target: string;
+  message: string;
+  success?: boolean;
+  details?: string;
+}
+
+export interface PortScanRecord {
+  port: number;
+  service: string;
+  status: 'open' | 'closed' | 'timeout';
+  latencyMs?: number;
+  details?: string;
+}
+
+export interface ActiveHostRecord {
+  ip: string;
+  rttMs: number;
+  status: 'alive' | 'timeout' | 'refused';
+  probableType: 'gateway' | 'camera' | 'device' | 'unknown';
+  isGateway?: boolean;
+  portsScanned?: PortScanRecord[];
+  hostname?: string;
+  cameraProfile?: LearnedCameraProfile;
+}
+
+export interface NetworkDiagnosticReport {
+  generatedAt: string;
+  subnet: string;
+  gatewayIp?: string;
+  gatewayLatencyMs?: number;
+  totalHostsScanned: number;
+  activeHostsCount: number;
+  activeHosts: ActiveHostRecord[];
+  discoveredCameras: LearnedCameraProfile[];
+  logText: string;
+  recommendations: string[];
 }

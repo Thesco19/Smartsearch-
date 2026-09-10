@@ -12,13 +12,16 @@ import {
   SmartCamAnalysisResponse,
   SecurityEventRecord,
   SecurityPreset,
+  NetworkCamera,
 } from './types';
 import { securityPresets } from './data/presets';
 import { soundSynthesizer } from './utils/audioAlert';
 import { AlertCircle } from 'lucide-react';
+import { CameraIntelligencePanel } from './components/CameraIntelligencePanel';
 
 export default function App() {
-  const [activeMode, setActiveMode] = useState<'live' | 'sandbox' | 'benchmark'>('sandbox');
+  const [activeMode, setActiveMode] = useState<'live' | 'network_ai' | 'sandbox' | 'benchmark'>('live');
+  const [externalCameraToView, setExternalCameraToView] = useState<NetworkCamera | null>(null);
   const [currentAnalysis, setCurrentAnalysis] = useState<SmartCamAnalysisResponse | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isAutoDetecting, setIsAutoDetecting] = useState(false);
@@ -155,8 +158,18 @@ export default function App() {
           sourceName={currentSourceName}
         />
 
-        {/* Mode: Automated Benchmark Test Suite */}
-        {activeMode === 'benchmark' ? (
+        {/* Mode: Autonomous Camera Intelligence & Auto-Connection */}
+        {activeMode === 'network_ai' ? (
+          <div className="space-y-4">
+            <CameraIntelligencePanel
+              activeCameraId={externalCameraToView?.id}
+              onSelectCameraToView={(camera) => {
+                setExternalCameraToView(camera);
+                setActiveMode('live');
+              }}
+            />
+          </div>
+        ) : activeMode === 'benchmark' ? (
           <div className="space-y-4">
             <SmartCamTestSuite onSelectTestAnalysis={handleSelectTestAnalysis} />
           </div>
@@ -184,6 +197,8 @@ export default function App() {
                   onChangeAutoInterval={setAutoIntervalSeconds}
                   selectedDetectionIndex={selectedDetectionIndex}
                   onSelectDetection={setSelectedDetectionIndex}
+                  externalSelectedCamera={externalCameraToView}
+                  onOpenIntelligencePanel={() => setActiveMode('network_ai')}
                 />
               )}
             </div>
