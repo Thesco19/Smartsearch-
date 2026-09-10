@@ -2,9 +2,6 @@ import express from "express";
 import path from "path";
 import { GoogleGenAI, Type } from "@google/genai";
 import { createServer as createViteServer } from "vite";
-import { networkInterfaces } from "os";
-import net from "net";
-import http from "http";
 
 async function startServer() {
   const app = express();
@@ -49,7 +46,7 @@ async function startServer() {
   app.post("/api/analyze-frame", async (req, res) => {
     const startTime = Date.now();
     try {
-      const { image, timestamp, securityContext } = req.body;
+      const { image, securityContext } = req.body;
       if (!image) return res.status(400).json({ error: "Frame required" });
 
       const match = image.match(/^data:([a-zA-Z0-9]+\/[a-zA-Z0-9-.+]+);base64,(.+)$/);

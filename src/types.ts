@@ -72,4 +72,29 @@ export interface SandboxEntity {
 export interface SecurityTestCase {
   id: string;
   title: string;
-  description: string
+  description: string;
+  targetFocus: string;
+  expectedCategory: DetectionCategory | 'none';
+  shouldTriggerAlert: boolean;
+  expectedSeverity?: AlertSeverity;
+  sceneSetup: {
+    scene: SandboxSceneType;
+    lighting: SandboxLighting;
+    weather: SandboxWeather;
+    entities: SandboxEntity[];
+    presetId: string;
+    customNote?: string;
+  };
+}
+
+export interface NetworkCamera {
+  id: string;
+  name: string;
+  ip: string;
+  status: 'online' | 'offline';
+}
+
+export interface NetworkScanState {
+  isScanning: boolean;
+  foundCameras: NetworkCamera[];
+}
