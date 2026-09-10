@@ -26,7 +26,8 @@ export const normalizeDetections = (detections: any[]): SmartCamDetection[] => {
         left: Math.max(0, Math.min(1, left)),
         bottom: Math.max(0, Math.min(1, bottom)),
         right: Math.max(0, Math.min(1, right)),
-      }
+      },
+      attributes: det.attributes || { description: "", action_state: "" }
     };
   });
 };
