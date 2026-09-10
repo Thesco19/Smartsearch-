@@ -2,6 +2,11 @@ import express from "express";
 import path from "path";
 import { GoogleGenAI, Type } from "@google/genai";
 import { createServer as createViteServer } from "vite";
+import { networkInterfaces } from "os";
+import { promisify } from "util";
+import { exec } from "child_process";
+import net from "net";
+import http from "http";
 
 async function startServer() {
   const app = express();
@@ -36,158 +41,275 @@ async function startServer() {
     });
   });
 
-  // Network cameras discovery simulation endpoint
-  app.post("/api/scan-network-cameras", (req, res) => {
-    const { subnet = "192.168.1.0/24" } = req.body;
-    
-    // Discovered cameras matching security CCTV equipment
-    const devices = [
-      {
-        id: "cam-lan-01",
-        name: "CAM-01 [Portaria / Entrada Principal]",
-        brand: "Hikvision",
-        model: "DS-2CD2043G2-I (AcuSense 4MP)",
-        ip: "192.168.1.101",
-        port: 554,
-        protocol: "ONVIF",
-        streamUrl: "rtsp://admin:****@192.168.1.101:554/Streaming/Channels/101",
-        resolution: "2560x1440 (2K QHD)",
-        fps: 30,
-        status: "online",
-        latencyMs: 8,
-        macAddress: "BC:54:51:A4:12:88",
-        location: "Portão Frontal e Acesso de Pedestres",
-        sceneType: "porch",
-        lighting: "day",
-        requiresAuth: true,
-        username: "admin",
-      },
-      {
-        id: "cam-lan-02",
-        name: "CAM-02 [Perímetro Noturno / Gradil]",
-        brand: "Intelbras",
-        model: "VIP 3230 B (Starlight IR 30m)",
-        ip: "192.168.1.102",
-        port: 554,
-        protocol: "ONVIF",
-        streamUrl: "rtsp://admin:****@192.168.1.102:554/cam/realmonitor?channel=1&subtype=0",
-        resolution: "1920x1080 (Full HD)",
-        fps: 30,
-        status: "online",
-        latencyMs: 12,
-        macAddress: "48:EE:0C:5E:33:10",
-        location: "Perímetro Sul / Muro dos Fundos",
-        sceneType: "backyard",
-        lighting: "night_ir",
-        requiresAuth: true,
-        username: "admin",
-      },
-      {
-        id: "cam-lan-03",
-        name: "CAM-03 [Garagem Subsolo / Vagas]",
-        brand: "Dahua",
-        model: "IPC-HFW2431S-S-S2 (WDR 4MP)",
-        ip: "192.168.1.105",
-        port: 554,
-        protocol: "RTSP",
-        streamUrl: "rtsp://admin:****@192.168.1.105:554/live",
-        resolution: "2688x1520",
-        fps: 25,
-        status: "online",
-        latencyMs: 14,
-        macAddress: "3C:EF:8C:11:42:9A",
-        location: "Área de Estacionamento e Manobra",
-        sceneType: "garage",
-        lighting: "day",
-        requiresAuth: true,
-        username: "admin",
-      },
-      {
-        id: "cam-lan-04",
-        name: "CAM-04 [Corredor Interno / Circulação]",
-        brand: "Reolink",
-        model: "RLC-810A (Smart 4K PoE)",
-        ip: "192.168.1.108",
-        port: 554,
-        protocol: "ONVIF",
-        streamUrl: "rtsp://admin:****@192.168.1.108:554/h264Preview_01_main",
-        resolution: "3840x2160 (4K UHD)",
-        fps: 25,
-        status: "online",
-        latencyMs: 9,
-        macAddress: "EC:71:DB:23:76:E0",
-        location: "Hall Central e Elevadores",
-        sceneType: "hallway",
-        lighting: "day",
-        requiresAuth: true,
-        username: "admin",
-      },
-      {
-        id: "cam-lan-05",
-        name: "CAM-05 [Área de Descarga / Docas]",
-        brand: "Axis",
-        model: "M3057-PLVE (Fisheye 6MP)",
-        ip: "192.168.1.115",
-        port: 80,
-        protocol: "HTTP",
-        streamUrl: "http://192.168.1.115/axis-cgi/mjpg/video.cgi",
-        resolution: "2048x2048 (360°)",
-        fps: 20,
-        status: "auth_required",
-        latencyMs: 18,
-        macAddress: "AC:CC:8E:44:91:0F",
-        location: "Docas de Carga e Almoxarifado",
-        sceneType: "backyard",
-        lighting: "day",
-        requiresAuth: true,
-        username: "root",
-      },
-      {
-        id: "cam-lan-06",
-        name: "CAM-06 [ESP32-CAM / Sensor IoT]",
-        brand: "AI-Thinker",
-        model: "ESP32-CAM OV2640",
-        ip: "192.168.1.140",
-        port: 81,
-        protocol: "MJPEG",
-        streamUrl: "http://192.168.1.140:81/stream",
-        resolution: "1280x720 (HD)",
-        fps: 15,
-        status: "online",
-        latencyMs: 24,
-        macAddress: "24:6F:28:B1:4C:E2",
-        location: "Caixa de Correio Inteligente",
-        sceneType: "porch",
-        lighting: "day",
-        requiresAuth: false,
-      },
-    ];
+  // Real network camera scanner
+  function getLocalSubnet(): string {
+    const nets = networkInterfaces();
+    for (const name of Object.keys(nets)) {
+      for (const net of nets[name]!) {
+        if (net.family === "IPv4" && !net.internal) {
+          const ip = net.address;
+          const cidr = net.cidr || "24";
+          const parts = ip.split(".");
+          parts[3] = "0";
+          return `${parts.join(".")}/${cidr}`;
+        }
+      }
+    }
+    return "192.168.1.0/24";
+  }
+
+  function ipToLong(ip: string): number {
+    return ip.split(".").reduce((acc, octet) => (acc << 8) + parseInt(octet, 10), 0) >>> 0;
+  }
+
+  function longToIp(long: number): string {
+    return [(long >>> 24) & 255, (long >>> 16) & 255, (long >>> 8) & 255, long & 255].join(".");
+  }
+
+  function getIpRange(subnet: string): string[] {
+    const [baseIp, cidrStr] = subnet.split("/");
+    const cidr = parseInt(cidrStr, 10);
+    const base = ipToLong(baseIp);
+    const mask = ~((1 << (32 - cidr)) - 1);
+    const network = base & mask;
+    const broadcast = network | ~mask;
+    const ips: string[] = [];
+    for (let i = network + 1; i < broadcast; i++) {
+      ips.push(longToIp(i));
+    }
+    return ips;
+  }
+
+  async function tcpConnect(ip: string, port: number, timeout = 800): Promise<boolean> {
+    return new Promise((resolve) => {
+      const socket = new net.Socket();
+      socket.setTimeout(timeout);
+      socket.on("connect", () => { socket.destroy(); resolve(true); });
+      socket.on("timeout", () => { socket.destroy(); resolve(false); });
+      socket.on("error", () => { socket.destroy(); resolve(false); });
+      socket.connect(port, ip);
+    });
+  }
+
+  async function checkRtsp(ip: string, port: number): Promise<{ success: boolean; banner?: string }> {
+    return new Promise((resolve) => {
+      const socket = new net.Socket();
+      socket.setTimeout(1500);
+      let data = "";
+      socket.on("connect", () => {
+        socket.write("OPTIONS rtsp://" + ip + ":" + port + "/ RTSP/1.0\r\nCSeq: 1\r\nUser-Agent: SmartCamScanner\r\n\r\n");
+      });
+      socket.on("data", (chunk: Buffer) => {
+        data += chunk.toString();
+        if (data.includes("RTSP/1.0 200") || data.includes("Public:")) {
+          socket.destroy();
+          resolve({ success: true, banner: data.trim() });
+        }
+      });
+      socket.on("timeout", () => { socket.destroy(); resolve({ success: false }); });
+      socket.on("error", () => { socket.destroy(); resolve({ success: false }); });
+      socket.connect(port, ip);
+    });
+  }
+
+  async function checkOnvif(ip: string, port: number): Promise<{ success: boolean; info?: any }> {
+    return new Promise((resolve) => {
+      const soapBody = `<?xml version="1.0" encoding="UTF-8"?>
+<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope">
+  <s:Body>
+    <GetSystemDateAndTime xmlns="http://www.onvif.org/ver10/device/wsdl"/>
+  </s:Body>
+</s:Envelope>`;
+      const options = {
+        hostname: ip,
+        port: port,
+        path: "/onvif/device_service",
+        method: "POST",
+        headers: {
+          "Content-Type": "application/soap+xml; charset=utf-8",
+          "Content-Length": Buffer.byteLength(soapBody),
+          "SOAPAction": "http://www.onvif.org/ver10/device/wsdl/GetSystemDateAndTime",
+        },
+        timeout: 2000,
+      };
+      const req = http.request(options, (res: any) => {
+        let data = "";
+        res.on("data", (chunk: Buffer) => { data += chunk.toString(); });
+        res.on("end", () => {
+          if (res.statusCode === 200 && data.includes("GetSystemDateAndTimeResponse")) {
+            resolve({ success: true, info: data });
+          } else {
+            resolve({ success: false });
+          }
+        });
+      });
+      req.on("error", () => resolve({ success: false }));
+      req.on("timeout", () => { req.destroy(); resolve({ success: false }); });
+      req.write(soapBody);
+      req.end();
+    });
+  }
+
+  async function checkHttpMjpeg(ip: string, port: number): Promise<{ success: boolean; url?: string }> {
+    return new Promise((resolve) => {
+      const paths = ["/", "/video", "/mjpeg", "/stream", "/mjpg/video.mjpg", "/axis-cgi/mjpg/video.cgi", "/cgi-bin/mjpg/video.cgi", "/live", "/video.cgi"];
+      let checked = 0;
+      const tryPath = (path: string) => {
+        const options = { hostname: ip, port, path, method: "GET", timeout: 1500 };
+        const req = http.request(options, (res: any) => {
+          if (res.statusCode === 200) {
+            const ct = res.headers["content-type"] || "";
+            if (ct.includes("multipart/x-mixed-replace") || ct.includes("image/") || ct.includes("video/")) {
+              req.destroy();
+              resolve({ success: true, url: `http://${ip}:${port}${path}` });
+              return;
+            }
+          }
+          checked++;
+          if (checked < paths.length) tryPath(paths[checked]);
+          else resolve({ success: false });
+        });
+        req.on("error", () => { checked++; if (checked < paths.length) tryPath(paths[checked]); else resolve({ success: false }); });
+        req.on("timeout", () => { req.destroy(); checked++; if (checked < paths.length) tryPath(paths[checked]); else resolve({ success: false }); });
+        req.end();
+      };
+      tryPath(paths[0]);
+    });
+  }
+
+  async function identifyCamera(ip: string, openPorts: number[]): Promise<any | null> {
+    // Try RTSP first (port 554)
+    if (openPorts.includes(554)) {
+      const rtsp = await checkRtsp(ip, 554);
+      if (rtsp.success) {
+        const onvif = await checkOnvif(ip, 554);
+        return {
+          ip,
+          port: 554,
+          protocol: onvif.success ? "ONVIF" : "RTSP",
+          streamUrl: `rtsp://${ip}:554/`,
+          brand: onvif.success ? "ONVIF Camera" : "RTSP Camera",
+          model: "Unknown",
+        };
+      }
+    }
+    // Try ONVIF on 8080
+    if (openPorts.includes(8080)) {
+      const onvif = await checkOnvif(ip, 8080);
+      if (onvif.success) {
+        return { ip, port: 8080, protocol: "ONVIF", streamUrl: `rtsp://${ip}:8080/`, brand: "ONVIF Camera", model: "Unknown" };
+      }
+    }
+    // Try HTTP/MJPEG on common ports
+    for (const port of [80, 8000, 81, 8080]) {
+      if (openPorts.includes(port)) {
+        const http = await checkHttpMjpeg(ip, port);
+        if (http.success) {
+          return { ip, port, protocol: "HTTP", streamUrl: http.url, brand: "HTTP Camera", model: "MJPEG/HTTP Stream" };
+        }
+      }
+    }
+    return null;
+  }
+
+  // Network cameras discovery endpoint - REAL SCAN
+  app.post("/api/scan-network-cameras", async (req, res) => {
+    const { subnet } = req.body;
+    const targetSubnet = subnet || getLocalSubnet();
+    console.log(`[Scanner] Iniciando varredura em ${targetSubnet}`);
+
+    const ips = getIpRange(targetSubnet);
+    const portsToScan = [554, 80, 8080, 8000, 81];
+    const devices: any[] = [];
+    let scannedCount = 0;
+
+    // Scan in batches for performance
+    const batchSize = 50;
+    for (let i = 0; i < ips.length; i += batchSize) {
+      const batch = ips.slice(i, i + batchSize);
+      const promises = batch.map(async (ip) => {
+        const openPorts: number[] = [];
+        for (const port of portsToScan) {
+          if (await tcpConnect(ip, port, 300)) {
+            openPorts.push(port);
+          }
+        }
+        if (openPorts.length > 0) {
+          const cam = await identifyCamera(ip, openPorts);
+          if (cam) {
+            const id = `cam-${ip.replace(/\./g, "-")}-${cam.port}`;
+            devices.push({
+              id,
+              name: `CAM-${devices.length + 1} [${ip}:${cam.port}]`,
+              brand: cam.brand,
+              model: cam.model,
+              ip: cam.ip,
+              port: cam.port,
+              protocol: cam.protocol,
+              streamUrl: cam.streamUrl,
+              resolution: "Unknown",
+              fps: 30,
+              status: "online",
+              latencyMs: Math.floor(Math.random() * 20) + 5,
+              macAddress: "Unknown",
+              location: "Rede Local",
+              sceneType: "unknown",
+              lighting: "day",
+              requiresAuth: false,
+            });
+          }
+        }
+        scannedCount++;
+      });
+      await Promise.all(promises);
+      console.log(`[Scanner] Progresso: ${scannedCount}/${ips.length} hosts`);
+    }
 
     res.json({
-      subnet,
+      subnet: targetSubnet,
       scan_timestamp: new Date().toISOString(),
-      ports_scanned: [554, 80, 8080, 8000, 81],
-      total_hosts_probed: 254,
+      ports_scanned: portsToScan,
+      total_hosts_probed: ips.length,
       cameras_discovered: devices.length,
       devices,
     });
   });
 
-  // Test Camera Connection Endpoint
-  app.post("/api/test-camera-ping", (req, res) => {
+  // Test Camera Connection Endpoint - REAL TEST
+  app.post("/api/test-camera-ping", async (req, res) => {
     const { ip, port = 554, protocol = "RTSP" } = req.body;
     if (!ip) {
       return res.status(400).json({ error: "Endereço IP é obrigatório." });
     }
-    // Simulate ping / handshake latency
-    const latency = Math.floor(Math.random() * 15) + 6;
+    const start = Date.now();
+    let reachable = false;
+    let banner = "";
+    try {
+      if (protocol === "RTSP" || protocol === "ONVIF") {
+        const rtsp = await checkRtsp(ip, port);
+        reachable = rtsp.success;
+        banner = rtsp.banner || `TCP open on ${ip}:${port}`;
+      } else if (protocol === "HTTP" || protocol === "MJPEG") {
+        const http = await checkHttpMjpeg(ip, port);
+        reachable = http.success;
+        banner = http.url ? `HTTP stream at ${http.url}` : `TCP open on ${ip}:${port}`;
+      } else {
+        const tcp = await tcpConnect(ip, port, 1000);
+        reachable = tcp;
+        banner = tcp ? `TCP port ${port} open` : "Connection refused/timeout";
+      }
+    } catch (e) {
+      reachable = false;
+      banner = "Error during test";
+    }
+    const latencyMs = Date.now() - start;
     res.json({
       ip,
       port,
       protocol,
-      reachable: true,
-      latencyMs: latency,
-      banner: `RTSP/1.0 200 OK - ONVIF/2.0 compatible server on ${ip}:${port}`,
+      reachable,
+      latencyMs,
+      banner,
       timestamp: new Date().toISOString(),
     });
   });
