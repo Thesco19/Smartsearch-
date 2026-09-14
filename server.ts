@@ -820,7 +820,7 @@ ${securityContext ? `CONTEXTO ESPECÍFICO DE SEGURANÇA: ${securityContext}` : "
 
 async function startServer() {
   const app = await createApp();
-  const PORT = 3000;
+  const PORT = Number(process.env.PORT) || 3100;
 
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`[SmartCam Server] Rodando na porta ${PORT}`);
