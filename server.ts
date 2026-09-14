@@ -2,9 +2,15 @@ import express from "express";
 import path from "path";
 import net from "net";
 import http from "http";
+import { pathToFileURL } from "url";
 import { GoogleGenAI, Type } from "@google/genai";
 import { createServer as createViteServer } from "vite";
 import { networkInterfaces } from "os";
+import { parseSubnet, getIpRange, isValidIpv4 } from "./src/utils/network.ts";
+import { normalizeDetections } from "./src/utils/detection.ts";
+
+const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-3.1-flash-lite";
+const API_KEY = process.env.SMARTCAM_API_KEY;
 
 // Real TCP Socket probe for backend reachability test
 function probeTcpSocket(
@@ -62,13 +68,21 @@ function probeTcpSocket(
   });
 }
 
-async function startServer() {
+export async function createApp() {
   const app = express();
-  const PORT = 3000;
 
   // Middleware for large payload base64 frames
   app.use(express.json({ limit: "50mb" }));
   app.use(express.urlencoded({ extended: true, limit: "50mb" }));
+
+  // Optional API-key auth: if SMARTCAM_API_KEY is set, /api/scan-* and
+  // /api/analyze-frame require the X-API-Key header. Without it, endpoints stay open.
+  const requireApiKey: express.RequestHandler = (req, res, next) => {
+    if (!API_KEY) return next();
+    const provided = req.headers["x-api-key"];
+    if (provided === API_KEY) return next();
+    return res.status(401).json({ error: "API key ausente ou inválida." });
+  };
 
   // Initialize Gemini client lazily/safely
   const getAiClient = () => {
@@ -92,6 +106,7 @@ async function startServer() {
       status: "ok",
       timestamp: new Date().toISOString(),
       hasKey: Boolean(process.env.GEMINI_API_KEY),
+      authEnabled: Boolean(API_KEY),
     });
   });
 
@@ -111,28 +126,6 @@ async function startServer() {
       }
     }
     return "192.168.1.0/24";
-  }
-
-  function ipToLong(ip: string): number {
-    return ip.split(".").reduce((acc, octet) => (acc << 8) + parseInt(octet, 10), 0) >>> 0;
-  }
-
-  function longToIp(long: number): string {
-    return [(long >>> 24) & 255, (long >>> 16) & 255, (long >>> 8) & 255, long & 255].join(".");
-  }
-
-  function getIpRange(subnet: string): string[] {
-    const [baseIp, cidrStr] = subnet.split("/");
-    const cidr = parseInt(cidrStr, 10);
-    const base = ipToLong(baseIp);
-    const mask = ~((1 << (32 - cidr)) - 1);
-    const network = base & mask;
-    const broadcast = network | ~mask;
-    const ips: string[] = [];
-    for (let i = network + 1; i < broadcast; i++) {
-      ips.push(longToIp(i));
-    }
-    return ips;
   }
 
   async function tcpConnect(ip: string, port: number, timeout = 800): Promise<boolean> {
@@ -280,9 +273,12 @@ async function startServer() {
   }
 
   // Network cameras discovery endpoint - REAL SCAN (gentle, router-safe)
-  app.post("/api/scan-network-cameras", async (req, res) => {
+  app.post("/api/scan-network-cameras", requireApiKey, async (req, res) => {
     const { subnet } = req.body;
     const targetSubnet = subnet || getLocalSubnet();
+    if (!parseSubnet(targetSubnet)) {
+      return res.status(400).json({ error: "Subnet inválida. Use o formato IPv4/CIDR (ex: 192.168.1.0/24)." });
+    }
     console.log(`[Scanner] Iniciando varredura conservadora em ${targetSubnet}`);
 
     const ips = getIpRange(targetSubnet);
@@ -350,10 +346,13 @@ async function startServer() {
   });
 
   // Test Camera Connection Endpoint - REAL TEST (protocol aware)
-  app.post("/api/test-camera-ping", async (req, res) => {
+  app.post("/api/test-camera-ping", requireApiKey, async (req, res) => {
     const { ip, port = 554, protocol = "RTSP" } = req.body;
     if (!ip) {
       return res.status(400).json({ error: "Endereço IP é obrigatório." });
+    }
+    if (!isValidIpv4(String(ip))) {
+      return res.status(400).json({ error: "Endereço IP inválido." });
     }
 
     const numPort = Number(port) || 554;
@@ -411,10 +410,13 @@ async function startServer() {
   });
 
   // Real Multi-Port Scan Endpoint (TCP Sockets)
-  app.post("/api/scan-tcp-ports", async (req, res) => {
+  app.post("/api/scan-tcp-ports", requireApiKey, async (req, res) => {
     const { ip, ports = [554, 5000, 8899, 80, 8080, 81] } = req.body;
     if (!ip) {
       return res.status(400).json({ error: "Endereço IP é obrigatório." });
+    }
+    if (!isValidIpv4(String(ip))) {
+      return res.status(400).json({ error: "Endereço IP inválido." });
     }
 
     const results = [];
@@ -440,7 +442,7 @@ async function startServer() {
   // Diagnostic Log Storage Endpoint (in-memory store for sharing & troubleshooting)
   let latestDiagnosticLogs: Array<{ id: string; savedAt: string; title: string; content: string }> = [];
 
-  app.post("/api/save-scan-log", (req, res) => {
+  app.post("/api/save-scan-log", requireApiKey, (req, res) => {
     const { title = "Relatório de Rastreio de Rede", content } = req.body;
     if (!content) {
       return res.status(400).json({ error: "Conteúdo do log é obrigatório." });
@@ -466,10 +468,18 @@ async function startServer() {
   });
 
   // Proxy camera snapshot endpoint (solves CORS / Mixed-Content for reachable camera URLs)
-  app.get("/api/proxy-camera-snapshot", async (req, res) => {
+  app.get("/api/proxy-camera-snapshot", requireApiKey, async (req, res) => {
     const targetUrl = req.query.url as string;
     if (!targetUrl) {
       return res.status(400).json({ error: "Parâmetro 'url' é obrigatório." });
+    }
+    try {
+      const parsedUrl = new URL(targetUrl);
+      if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") {
+        return res.status(400).json({ error: "URL inválida. Somente http/https são aceitos." });
+      }
+    } catch {
+      return res.status(400).json({ error: "URL inválida." });
     }
 
     try {
@@ -506,12 +516,15 @@ async function startServer() {
   });
 
   // AI Camera Config Resolver (Gemini deduces brand, model, stream paths, and protocol)
-  app.post("/api/ai-resolve-camera-config", async (req, res) => {
+  app.post("/api/ai-resolve-camera-config", requireApiKey, async (req, res) => {
     try {
       const { ip, detectedPorts = [], bannerInfo = "", partialBrandOrModel = "" } = req.body;
 
       if (!ip) {
         return res.status(400).json({ error: "O endereço IP é obrigatório." });
+      }
+      if (!isValidIpv4(String(ip))) {
+        return res.status(400).json({ error: "Endereço IP inválido." });
       }
 
       const ai = getAiClient();
@@ -531,7 +544,7 @@ Com base no seu conhecimento de milhares de modelos de segurança (Kapbom, Yoose
 6. Explique brevemente sua dedução técnica e como o aplicativo deve se conectar.`;
 
       const response = await ai.models.generateContent({
-        model: "gemini-3.8-flash",
+        model: GEMINI_MODEL,
         contents: prompt,
         config: {
           responseMimeType: "application/json",
@@ -631,7 +644,7 @@ Com base no seu conhecimento de milhares de modelos de segurança (Kapbom, Yoose
   });
 
   // Analyze frame endpoint
-  app.post("/api/analyze-frame", async (req, res) => {
+  app.post("/api/analyze-frame", requireApiKey, async (req, res) => {
     const startTime = Date.now();
     try {
       const { image, timestamp, securityContext } = req.body;
@@ -671,7 +684,7 @@ REGRAS DE SEGURANÇA E PRECISÃO:
 ${securityContext ? `CONTEXTO ESPECÍFICO DE SEGURANÇA: ${securityContext}` : ""}`;
 
       const response = await ai.models.generateContent({
-        model: "gemini-3.8-flash",
+        model: GEMINI_MODEL,
         contents: {
           parts: [
             {
@@ -770,36 +783,7 @@ ${securityContext ? `CONTEXTO ESPECÍFICO DE SEGURANÇA: ${securityContext}` : "
       }
 
       // Coordinate normalization safety check (if model returns 0..1000 or > 1, normalize to 0..1)
-      if (Array.isArray(parsedData.detections)) {
-        parsedData.detections = parsedData.detections.map((det: any) => {
-          let { top, left, bottom, right } = det.bounding_box_relative || { top: 0, left: 0, bottom: 0, right: 0 };
-          if (top > 1 || left > 1 || bottom > 1 || right > 1) {
-            top = top / 1000;
-            left = left / 1000;
-            bottom = bottom / 1000;
-            right = right / 1000;
-          }
-          // Ensure valid bounds
-          top = Math.max(0, Math.min(1, top));
-          left = Math.max(0, Math.min(1, left));
-          bottom = Math.max(0, Math.min(1, bottom));
-          right = Math.max(0, Math.min(1, right));
-
-          let category = det.category?.toLowerCase();
-          if (!["person", "animal", "object", "vehicle"].includes(category)) {
-            if (category?.includes("car") || category?.includes("veic") || category?.includes("moto")) category = "vehicle";
-            else if (category?.includes("pess") || category?.includes("hum") || category?.includes("man")) category = "person";
-            else if (category?.includes("anim") || category?.includes("dog") || category?.includes("cat") || category?.includes("cao")) category = "animal";
-            else category = "object";
-          }
-
-          return {
-            ...det,
-            category,
-            bounding_box_relative: { top, left, bottom, right },
-          };
-        });
-      }
+      parsedData.detections = normalizeDetections(parsedData.detections);
 
       const elapsed = Date.now() - startTime;
       parsedData.processing_time_ms = elapsed;
@@ -816,8 +800,8 @@ ${securityContext ? `CONTEXTO ESPECÍFICO DE SEGURANÇA: ${securityContext}` : "
     }
   });
 
-  // Setup Vite middleware in dev or serve static files in production
-  if (process.env.NODE_ENV !== "production") {
+  // Setup Vite middleware in dev, serve static in production (skip on tests)
+  if (process.env.NODE_ENV !== "production" && process.env.NODE_ENV !== "test") {
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
@@ -831,9 +815,21 @@ ${securityContext ? `CONTEXTO ESPECÍFICO DE SEGURANÇA: ${securityContext}` : "
     });
   }
 
+  return app;
+}
+
+async function startServer() {
+  const app = await createApp();
+  const PORT = 3000;
+
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`[SmartCam Server] Rodando na porta ${PORT}`);
   });
 }
 
-startServer();
+const isMain = process.argv[1] != null && import.meta.url === pathToFileURL(process.argv[1]).href;
+if (isMain) {
+  startServer();
+}
+
+export { startServer };
